@@ -338,6 +338,8 @@ class Fetcher:
         if needs_browser and self.use_playwright:
             try:
                 js_result = await self._fetch_js(url)
+            except asyncio.CancelledError:
+                raise
             except Exception as exc:  # noqa: BLE001 - any browser failure falls back
                 log.warning("Browser fetch of %s failed (%s); falling back to static.", url, exc)
                 if isinstance(exc, BlockedError) and static_result is None:

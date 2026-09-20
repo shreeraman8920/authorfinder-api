@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from authorfinder.crawler import AuthorCrawler
@@ -97,3 +99,30 @@ async def test_crawl_missing_fields_are_null_or_empty():
     assert author["twitter"] is None
     assert author["social_links"] == []
     assert author["bio"] == "Jane Doe writes for Example News."
+
+
+class SlowFetcher:
+    """Fetcher that hangs long enough to trigger a timeout."""
+    async def fetch(self, url):
+        await asyncio.sleep(100)
+        return FetchResult(url=url, html="", status_code=200, final_url=url)
+
+
+@pytest.mark.asyncio
+async def test_crawl_times_out_when_overall_timeout_exceeded():
+    crawler = AuthorCrawler(fetcher=SlowFetcher())
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(crawler.crawl("https://news.example.com/slow"), timeout=0.1)
+
+
+@pytest.mark.asyncio
+async def test_crawl_does_not_timeout_when_fast():
+    article = "https://news.example.com/2024/01/15/fast-story"
+    crawler = _crawler(
+        {
+            article: (article_html(), article),
+            AUTHOR_URL: (author_html(), AUTHOR_URL),
+        }
+    )
+    result = await asyncio.wait_for(crawler.crawl(article), timeout=5.0)
+    assert result["status"] == "success"

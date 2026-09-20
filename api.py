@@ -28,6 +28,7 @@ API_KEY = os.environ.get("AUTHORFINDER_API_KEY", "")
 MAX_CONCURRENT = int(os.environ.get("AUTHORFINDER_MAX_CONCURRENT", "5"))
 DEFAULT_TIMEOUT = float(os.environ.get("AUTHORFINDER_TIMEOUT", "20"))
 DEFAULT_DELAY = float(os.environ.get("AUTHORFINDER_DELAY", "1.5"))
+CRAWL_TIMEOUT = float(os.environ.get("AUTHORFINDER_CRAWL_TIMEOUT", "60"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,7 +146,10 @@ async def crawl_article(req: CrawlRequest, _=Depends(verify_api_key)):
             timeout=req.timeout,
             delay=req.delay,
         )
-        result = await crawler.crawl(str(req.url))
+        result = await asyncio.wait_for(
+            crawler.crawl(str(req.url)),
+            timeout=CRAWL_TIMEOUT,
+        )
         elapsed = time.monotonic() - start
         return CrawlResponse(
             article_url=result["article_url"],
@@ -155,6 +159,10 @@ async def crawl_article(req: CrawlRequest, _=Depends(verify_api_key)):
             error=result.get("error"),
             elapsed_seconds=round(elapsed, 2),
         )
+    except asyncio.TimeoutError:
+        elapsed = time.monotonic() - start
+        log.warning("Crawl of %s timed out after %.1fs", req.url, elapsed)
+        raise HTTPException(status_code=504, detail=f"Crawl timed out after {CRAWL_TIMEOUT}s")
     except Exception as exc:
         log.exception("Crawl failed for %s", req.url)
         raise HTTPException(status_code=500, detail=str(exc))
@@ -176,7 +184,10 @@ async def crawl_batch(req: BatchCrawlRequest, _=Depends(verify_api_key)):
                 timeout=req.timeout,
                 delay=req.delay,
             )
-            result = await crawler.crawl(url)
+            result = await asyncio.wait_for(
+                crawler.crawl(url),
+                timeout=CRAWL_TIMEOUT,
+            )
             elapsed = time.monotonic() - t0
             return CrawlResponse(
                 article_url=result["article_url"],
@@ -184,6 +195,16 @@ async def crawl_batch(req: BatchCrawlRequest, _=Depends(verify_api_key)):
                 authors=[AuthorInfo(**a) for a in result.get("authors", [])],
                 status=result["status"],
                 error=result.get("error"),
+                elapsed_seconds=round(elapsed, 2),
+            )
+        except asyncio.TimeoutError:
+            elapsed = time.monotonic() - t0
+            log.warning("Crawl of %s timed out after %.1fs", url, elapsed)
+            return CrawlResponse(
+                article_url=url,
+                author=AuthorInfo(),
+                status="timeout",
+                error=f"Crawl timed out after {CRAWL_TIMEOUT}s",
                 elapsed_seconds=round(elapsed, 2),
             )
         except Exception as exc:

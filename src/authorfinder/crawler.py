@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from .author import choose_author, detect_authors, choose_multiple_authors
@@ -126,6 +127,8 @@ class AuthorCrawler:
             log.warning("Content behind paywall: %s", exc)
             result["status"] = "paywall"
             result["error"] = str(exc)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:  # noqa: BLE001 - report any failure gracefully
             log.exception("Crawl of %s failed", article_url)
             result["status"] = "error"
