@@ -10,11 +10,10 @@ Docs:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time
-import uuid
-from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Security
@@ -58,8 +57,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT)
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -148,7 +145,7 @@ async def crawl_article(req: CrawlRequest, _=Depends(verify_api_key)):
             timeout=req.timeout,
             delay=req.delay,
         )
-        result = crawler.crawl(str(req.url))
+        result = await crawler.crawl(str(req.url))
         elapsed = time.monotonic() - start
         return CrawlResponse(
             article_url=result["article_url"],
@@ -170,9 +167,8 @@ async def crawl_batch(req: BatchCrawlRequest, _=Depends(verify_api_key)):
         raise HTTPException(status_code=400, detail="Maximum 50 URLs per batch")
 
     start = time.monotonic()
-    results: list[CrawlResponse] = []
 
-    def _crawl_one(url: str) -> CrawlResponse:
+    async def _crawl_one(url: str) -> CrawlResponse:
         t0 = time.monotonic()
         try:
             crawler = AuthorCrawler(
@@ -180,7 +176,7 @@ async def crawl_batch(req: BatchCrawlRequest, _=Depends(verify_api_key)):
                 timeout=req.timeout,
                 delay=req.delay,
             )
-            result = crawler.crawl(url)
+            result = await crawler.crawl(url)
             elapsed = time.monotonic() - t0
             return CrawlResponse(
                 article_url=result["article_url"],
@@ -201,10 +197,7 @@ async def crawl_batch(req: BatchCrawlRequest, _=Depends(verify_api_key)):
                 elapsed_seconds=round(elapsed, 2),
             )
 
-    import asyncio
-    loop = asyncio.get_event_loop()
-    futures = [loop.run_in_executor(executor, _crawl_one, str(u)) for u in req.urls]
-    results = await asyncio.gather(*futures)
+    results = await asyncio.gather(*[_crawl_one(str(u)) for u in req.urls])
 
     elapsed = time.monotonic() - start
     success_count = sum(1 for r in results if r.status == "success")

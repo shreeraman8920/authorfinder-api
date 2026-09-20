@@ -5,6 +5,7 @@ Requests are rate-limited (small delay), time-bounded, and gated by robots.txt.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -219,38 +220,38 @@ def _looks_like_paywall(html: str) -> bool:
     return any(marker in body_text for marker in _PAYWALL_BODY_MARKERS)
 
 
-def _dismiss_consent(page) -> None:
+async def _dismiss_consent(page) -> None:
     """Best-effort: click away a consent banner that hides the article."""
     for selector in _CONSENT_SELECTORS:
         try:
-            button = page.query_selector(selector)
+            button = await page.query_selector(selector)
             if button is None:
                 continue
-            button.click(timeout=1500)
+            await button.click(timeout=1500)
             log.debug("Dismissed consent banner via %s", selector)
             return
         except Exception:  # noqa: BLE001 - a stubborn banner must never abort the fetch
             continue
     try:
-        button = page.query_selector("button:has-text('Accept')")
+        button = await page.query_selector("button:has-text('Accept')")
         if button is not None:
-            button.click(timeout=1500)
+            await button.click(timeout=1500)
             log.debug("Dismissed consent banner via button text")
     except Exception:  # noqa: BLE001
         pass
 
 
-def _wait_for_content(page, timeout: float, min_chars: int = 200) -> None:
+async def _wait_for_content(page, timeout: float, min_chars: int = 200) -> None:
     """Wait until the rendered page actually has text (SPAs hydrate late)."""
     try:
-        page.wait_for_load_state("domcontentloaded", timeout=min(timeout, 10) * 1000)
+        await page.wait_for_load_state("domcontentloaded", timeout=min(timeout, 10) * 1000)
     except Exception:  # noqa: BLE001
         pass
     deadline = time.monotonic() + min(timeout, 10.0)
     scrolled = False
     while True:
         try:
-            text = page.inner_text("body")
+            text = await page.inner_text("body")
         except Exception:  # noqa: BLE001
             text = ""
         if len(text.strip()) >= min_chars:
@@ -260,11 +261,11 @@ def _wait_for_content(page, timeout: float, min_chars: int = 200) -> None:
         if not scrolled:
             # A single scroll nudges lazy-loaded content into place.
             try:
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
             except Exception:  # noqa: BLE001
                 pass
             scrolled = True
-        page.wait_for_timeout(250)
+        await page.wait_for_timeout(250)
 
 
 def _safe_decode(content: bytes, declared: str | None) -> str:
@@ -316,11 +317,11 @@ class Fetcher:
         )
         self.robots = RobotsChecker(user_agent)
 
-    def fetch(self, url: str) -> FetchResult:
+    async def fetch(self, url: str) -> FetchResult:
         if not self.robots.can_fetch(url):
             log.info("Blocked by robots.txt: %s", url)
             raise RobotsError(f"robots.txt disallows fetching {url}")
-        time.sleep(self.delay)
+        await asyncio.sleep(self.delay)
 
         static_result = None
         static_error: Exception | None = None
@@ -336,7 +337,7 @@ class Fetcher:
         needs_browser = static_result is None or not _has_content(static_result.html)
         if needs_browser and self.use_playwright:
             try:
-                js_result = self._fetch_js(url)
+                js_result = await self._fetch_js(url)
             except Exception as exc:  # noqa: BLE001 - any browser failure falls back
                 log.warning("Browser fetch of %s failed (%s); falling back to static.", url, exc)
                 if isinstance(exc, BlockedError) and static_result is None:
@@ -392,11 +393,11 @@ class Fetcher:
         # Unreachable in practice: the loop only exits via return or raise.
         raise requests.HTTPError(f"no successful response for {url}")
 
-    def _fetch_js(self, url: str) -> FetchResult:
+    async def _fetch_js(self, url: str) -> FetchResult:
         import sys
         frozen = getattr(sys, "frozen", False)
         try:
-            from playwright.sync_api import sync_playwright
+            from playwright.async_api import async_playwright
         except ImportError as exc:  # pragma: no cover - depends on optional dep
             log.warning("Playwright not installed; cannot use browser fallback for %s", url)
             raise RuntimeError(
@@ -404,26 +405,26 @@ class Fetcher:
                 "and then 'python -m playwright install chromium'."
             ) from exc
         log.debug("Launching Playwright browser for %s", url)
-        with sync_playwright() as p:
+        async with async_playwright() as p:
             # In a .exe, Chromium isn't bundled — use system Chrome instead.
             channel = "chrome" if frozen else None
-            browser = p.chromium.launch(headless=True, channel=channel)
+            browser = await p.chromium.launch(headless=True, channel=channel)
             try:
-                context = browser.new_context(
+                context = await browser.new_context(
                     user_agent=self.user_agent,
                     locale="en-US",
                     viewport={"width": 1366, "height": 900},
                 )
-                page = context.new_page()
-                resp = page.goto(url, timeout=int(self.timeout * 1000), wait_until="domcontentloaded")
-                _dismiss_consent(page)
-                _wait_for_content(page, self.timeout)
-                html = page.content()
+                page = await context.new_page()
+                resp = await page.goto(url, timeout=int(self.timeout * 1000), wait_until="domcontentloaded")
+                await _dismiss_consent(page)
+                await _wait_for_content(page, self.timeout)
+                html = await page.content()
                 if _has_bad_chars(html) and resp is not None:
                     # The browser decoded per the declared charset; if that
                     # produced mojibake, re-decode the raw response bytes.
                     try:
-                        body = resp.body()
+                        body = await resp.body()
                     except Exception:
                         body = None
                     if body:
@@ -440,7 +441,7 @@ class Fetcher:
                 if _looks_like_paywall(html):
                     raise PaywallError(f"paywall detected in browser for {url}")
             finally:
-                browser.close()
+                await browser.close()
         log.debug("Playwright fetched %s (status=%s)", url, status)
         return FetchResult(url=url, html=html, status_code=status or 0, final_url=final_url)
 

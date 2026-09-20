@@ -16,7 +16,7 @@ class AuthorCrawler:
     def __init__(self, fetcher: Fetcher | None = None, **fetch_kwargs):
         self.fetcher = fetcher or Fetcher(**fetch_kwargs)
 
-    def crawl(self, article_url: str) -> dict:
+    async def crawl(self, article_url: str) -> dict:
         article_url = normalize_article_url(article_url)
         result: dict = {
             "article_url": article_url,
@@ -37,7 +37,7 @@ class AuthorCrawler:
         }
         try:
             log.info("Stage 1/4: Fetching article page: %s", article_url)
-            article_res = self.fetcher.fetch(article_url)
+            article_res = await self.fetcher.fetch(article_url)
             article_soup = parse_html(article_res.html)
             final_article_url = article_res.final_url or article_url
             result["article_url"] = final_article_url
@@ -70,7 +70,7 @@ class AuthorCrawler:
 
             result["author"]["profile_url"] = author.profile_url
             log.info("Stage 3/4: Fetching author page: %s", author.profile_url)
-            author_res = self.fetcher.fetch(author.profile_url)
+            author_res = await self.fetcher.fetch(author.profile_url)
             author_soup = parse_html(author_res.html)
             author_final_url = author_res.final_url or author.profile_url
             result["author"]["profile_url"] = author_final_url
@@ -90,7 +90,7 @@ class AuthorCrawler:
                 for extra in multiple[1:]:
                     if extra.profile_url and same_domain(extra.profile_url, final_article_url):
                         try:
-                            er = self.fetcher.fetch(extra.profile_url)
+                            er = await self.fetcher.fetch(extra.profile_url)
                             esoup = parse_html(er.html)
                             einfo = extract_author_page(esoup, er.final_url or extra.profile_url)
                             eauthor = {
