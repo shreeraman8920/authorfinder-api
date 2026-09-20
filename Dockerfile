@@ -1,9 +1,11 @@
+# Koyeb-optimized Dockerfile with Playwright support
 FROM python:3.11-slim
 
+# Prevent Python from writing .pyc files and enable unbuffered output
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# System dependencies for Playwright/Chromium
+# Install system dependencies required by Playwright/Chromium
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libnss3 \
     libnspr4 \
@@ -28,31 +30,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxshmfence1 \
     fonts-liberation \
     fonts-noto-color-emoji \
-    wget \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Set working directory
 WORKDIR /app
 
-# Install Python dependencies
+# Copy requirements first (for better caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy package configuration and source
-COPY pyproject.toml .
-COPY README.md .
+# Install Playwright and Chromium (minimal)
+RUN playwright install --with-deps chromium
+
+# Copy application code
 COPY src/ ./src/
 COPY api.py .
 
-# Install AuthorFinder package
-RUN pip install --no-cache-dir .
-
-# Install Chromium
-RUN playwright install chromium
-
+# Expose port (Koyeb uses PORT env var)
 EXPOSE 8000
 
+# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run the API
+CMD ["sh", "-c", "uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}"]
