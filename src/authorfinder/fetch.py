@@ -341,6 +341,8 @@ class Fetcher:
                 log.warning("Browser fetch of %s failed (%s); falling back to static.", url, exc)
                 if isinstance(exc, BlockedError) and static_result is None:
                     static_error = exc
+                elif static_result is None and static_error is None:
+                    static_error = exc
             else:
                 if static_result is None or _has_content(js_result.html):
                     return js_result
@@ -396,10 +398,12 @@ class Fetcher:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:  # pragma: no cover - depends on optional dep
+            log.warning("Playwright not installed; cannot use browser fallback for %s", url)
             raise RuntimeError(
                 "Playwright is not installed. Run: pip install 'authorfinder[playwright]' "
                 "and then 'python -m playwright install chromium'."
             ) from exc
+        log.debug("Launching Playwright browser for %s", url)
         with sync_playwright() as p:
             # In a .exe, Chromium isn't bundled — use system Chrome instead.
             channel = "chrome" if frozen else None
