@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+*.exe
+.pytest_cache/
+test_results.json
+test_urls.txt
+run_test.py
+analyze_results.py
