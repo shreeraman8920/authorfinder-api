@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AuthorFinder — Extract Journalist & Author Information</title>
+    <meta name="description" content="AI-assisted journalist and author extraction from news articles">
+    <link rel="stylesheet" href="style.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128269;</text></svg>">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-content">
+                <div class="logo-section">
+                    <div class="logo-icon">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <path d="m21 21-4.3-4.3"></path>
+                        </svg>
+                    </div>
+                    <div class="logo-text">
+                        <h1>AuthorFinder</h1>
+                        <p class="subtitle">Extract journalist &amp; author information from news articles</p>
+                    </div>
+                </div>
+                <div class="api-status" id="apiStatus">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Checking API...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Single URL Extraction -->
+            <section class="card extraction-card">
+                <div class="card-header">
+                    <h2>Extract Author</h2>
+                    <p>Enter a news article URL to identify the author and extract contact information.</p>
+                </div>
+
+                <form id="extractForm" class="extract-form" novalidate>
+                    <div class="input-group">
+                        <label for="articleUrl" class="input-label">Article URL</label>
+                        <div class="input-wrapper">
+                            <input
+                                type="url"
+                                id="articleUrl"
+                                class="url-input"
+                                placeholder="https://example.com/news/article"
+                                required
+                                autocomplete="url"
+                                aria-describedby="urlHelp"
+                            >
+                            <button type="submit" id="extractBtn" class="btn btn-primary" disabled>
+                                <span class="btn-text">Extract Author</span>
+                                <span class="btn-loading" aria-hidden="true">
+                                    <svg class="spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                                    </svg>
+                                </span>
+                            </button>
+                        </div>
+                        <small id="urlHelp" class="input-help">Paste a full article URL including https://</small>
+                    </div>
+                </form>
+
+                <!-- Loading State -->
+                <div id="loadingState" class="loading-state" hidden>
+                    <div class="loading-content">
+                        <div class="loading-spinner"></div>
+                        <div class="loading-text">
+                            <strong>Analyzing article...</strong>
+                            <span>Fetching article and identifying author information.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Error State -->
+                <div id="errorState" class="error-state" hidden>
+                    <div class="error-content">
+                        <svg class="error-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="15" y1="9" x2="9" y2="15"></line>
+                            <line x1="9" y1="9" x2="15" y2="15"></line>
+                        </svg>
+                        <span id="errorMessage"></span>
+                    </div>
+                </div>
+
+                <!-- Results -->
+                <div id="resultsSection" class="results-section" hidden>
+                    <div class="results-header">
+                        <h3>Extraction Results</h3>
+                        <div class="results-meta">
+                            <span id="resultStatus" class="result-badge"></span>
+                            <span id="resultTime" class="result-time"></span>
+                        </div>
+                    </div>
+
+                    <div id="authorResults" class="author-results"></div>
+
+                    <!-- Raw JSON Toggle -->
+                    <details class="raw-json-section">
+                        <summary>View Raw JSON</summary>
+                        <pre id="rawJson" class="raw-json"></pre>
+                    </details>
+                </div>
+            </section>
+
+            <!-- Batch Processing -->
+            <section class="card batch-card">
+                <div class="card-header">
+                    <h2>Batch Extraction</h2>
+                    <p>Upload a CSV file with article URLs for bulk processing (up to 50 URLs).</p>
+                </div>
+
+                <div class="batch-upload">
+                    <label for="csvUpload" class="upload-label" id="uploadLabel">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="17 8 12 3 7 8"></polyline>
+                            <line x1="12" y1="3" x2="12" y2="15"></line>
+                        </svg>
+                        <span>Drop CSV file here or click to browse</span>
+                        <small>CSV must have a "url" column</small>
+                        <input type="file" id="csvUpload" accept=".csv,text/csv" hidden>
+                    </label>
+                    <div id="csvPreview" class="csv-preview" hidden>
+                        <div class="csv-info">
+                            <span id="csvCount">0 URLs found</span>
+                            <button type="button" id="clearCsv" class="btn btn-ghost btn-sm">Clear</button>
+                        </div>
+                        <button type="button" id="batchExtractBtn" class="btn btn-primary btn-full">
+                            Extract All Authors
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Batch Loading -->
+                <div id="batchLoading" class="loading-state" hidden>
+                    <div class="loading-content">
+                        <div class="loading-spinner"></div>
+                        <div class="loading-text">
+                            <strong>Processing batch...</strong>
+                            <span id="batchProgress">0 of 0 URLs processed</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Batch Results -->
+                <div id="batchResults" class="batch-results" hidden>
+                    <div class="batch-summary">
+                        <div class="summary-item">
+                            <span class="summary-label">Total</span>
+                            <span id="batchTotal" class="summary-value">0</span>
+                        </div>
+                        <div class="summary-item success">
+                            <span class="summary-label">Successful</span>
+                            <span id="batchSuccess" class="summary-value">0</span>
+                        </div>
+                        <div class="summary-item failed">
+                            <span class="summary-label">Failed</span>
+                            <span id="batchFailed" class="summary-value">0</span>
+                        </div>
+                        <div class="summary-item">
+                            <span class="summary-label">Time</span>
+                            <span id="batchTime" class="summary-value">0s</span>
+                        </div>
+                    </div>
+
+                    <div class="batch-table-wrapper">
+                        <table class="batch-table" id="batchTable">
+                            <thead>
+                                <tr>
+                                    <th>Status</th>
+                                    <th>Author</th>
+                                    <th>Email</th>
+                                    <th>LinkedIn</th>
+                                    <th>URL</th>
+                                </tr>
+                            </thead>
+                            <tbody id="batchTableBody"></tbody>
+                        </table>
+                    </div>
+
+                    <div class="batch-actions">
+                        <button type="button" id="downloadCsv" class="btn btn-secondary">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="7 10 12 15 17 10"></polyline>
+                                <line x1="12" y1="15" x2="12" y2="3"></line>
+                            </svg>
+                            Download CSV
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="app-footer">
+            <p>AuthorFinder v0.2.0 &mdash; Respects robots.txt &amp; rate limits</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
