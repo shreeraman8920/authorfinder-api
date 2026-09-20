@@ -5,7 +5,8 @@
 
 // ── Configuration ────────────────────────────────────────────────────────
 const API_BASE = 'https://authorfinder-api.shree8920.blitz.cloud';
-const REQUEST_TIMEOUT = 90000; // 90s — API may take time for Playwright renders
+const POLL_INTERVAL = 2000; // 2 seconds between status polls
+const MAX_POLL_TIME = 300000; // 5 minutes max polling time
 
 // ── DOM Elements ─────────────────────────────────────────────────────────
 const elements = {
@@ -78,19 +79,13 @@ async function checkApiHealth() {
 
 // ── Event Listeners ──────────────────────────────────────────────────────
 function setupEventListeners() {
-    // Form submission
     elements.form.addEventListener('submit', handleExtract);
-
-    // URL input validation
     elements.urlInput.addEventListener('input', validateUrlInput);
-
-    // CSV upload
     elements.csvUpload.addEventListener('change', handleCsvUpload);
     elements.clearCsv.addEventListener('click', clearCsv);
     elements.batchExtractBtn.addEventListener('click', handleBatchExtract);
     elements.downloadCsv.addEventListener('click', downloadResultsCsv);
 
-    // Drag and drop
     elements.uploadLabel.addEventListener('dragover', (e) => {
         e.preventDefault();
         elements.uploadLabel.classList.add('dragover');
@@ -124,6 +119,30 @@ function isValidHttpUrl(string) {
     }
 }
 
+// ── Job Polling ──────────────────────────────────────────────────────────
+async function pollJob(jobId, onProgress) {
+    const startTime = Date.now();
+    while (Date.now() - startTime < MAX_POLL_TIME) {
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+
+        const response = await fetch(`${API_BASE}/crawl/${jobId}`);
+        if (!response.ok) {
+            throw new Error(`Failed to poll job: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.status !== 'processing') {
+            return data;
+        }
+
+        if (onProgress) {
+            onProgress(data);
+        }
+    }
+    throw new Error('Polling timed out');
+}
+
 // ── Single Extraction ────────────────────────────────────────────────────
 async function handleExtract(e) {
     e.preventDefault();
@@ -139,38 +158,43 @@ async function handleExtract(e) {
     hideResults();
 
     try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-
-        const response = await fetch(`${API_BASE}/crawl`, {
+        // Submit job
+        const submitResponse = await fetch(`${API_BASE}/crawl`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url }),
-            signal: controller.signal,
         });
 
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.detail || `API returned status ${response.status}`);
+        if (!submitResponse.ok) {
+            const errorData = await submitResponse.json().catch(() => ({}));
+            throw new Error(errorData.detail || `API returned status ${submitResponse.status}`);
         }
 
-        const data = await response.json();
+        const { job_id } = await submitResponse.json();
+
+        // Poll for result
+        const result = await pollJob(job_id);
         hideLoading();
 
-        if (data.status === 'success') {
-            displayResults(data);
-        } else if (data.status === 'no_author_found' || data.status === 'no_author_page') {
-            displayNoAuthor(data);
+        if (result.status === 'completed' && result.result) {
+            const data = result.result;
+            if (data.status === 'success') {
+                displayResults(data);
+            } else if (data.status === 'no_author_found' || data.status === 'no_author_page') {
+                displayNoAuthor(data);
+            } else {
+                displayApiError(data);
+            }
+        } else if (result.status === 'timeout') {
+            showError(result.error || 'The crawl took too long to complete.');
+        } else if (result.status === 'failed') {
+            showError(result.error || 'The crawl failed.');
         } else {
-            displayApiError(data);
+            showError('Unexpected job status: ' + result.status);
         }
     } catch (err) {
         hideLoading();
-        if (err.name === 'AbortError') {
-            showError('The request took too long. The article may be difficult to access or the API may be waking from inactivity. Please try again.');
-        } else if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+        if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
             showError('Unable to connect to the AuthorFinder API. Please check your connection and try again.');
         } else {
             showError(err.message || 'Unable to extract author information. Please try again.');
@@ -188,7 +212,6 @@ function displayResults(data) {
     const author = data.author;
     let html = '<div class="author-card">';
 
-    // Author name
     html += '<div class="author-name-row">';
     if (author.name) {
         html += `<span class="author-name">${escapeHtml(author.name)}</span>`;
@@ -198,40 +221,26 @@ function displayResults(data) {
     }
     html += '</div>';
 
-    // Fields grid
     html += '<div class="author-fields">';
 
-    // Email
     if (author.email) {
         html += createFieldWithCopy('Email', author.email, 'mono');
     }
-
-    // Profile URL
     if (author.profile_url) {
         html += createFieldLink('Profile', author.profile_url);
     }
-
-    // LinkedIn
     if (author.linkedin) {
         html += createFieldLink('LinkedIn', author.linkedin);
     }
-
-    // Twitter
     if (author.twitter) {
         html += createFieldLink('Twitter / X', author.twitter);
     }
-
-    // Organization
     if (author.organization) {
         html += createFieldWithCopy('Organization', author.organization);
     }
-
-    // Location
     if (author.location) {
         html += createFieldWithCopy('Location', author.location);
     }
-
-    // Social links
     if (author.social_links && author.social_links.length > 0) {
         html += '<div class="field-item" style="grid-column: 1 / -1;">';
         html += '<span class="field-label">Social Links</span>';
@@ -241,8 +250,6 @@ function displayResults(data) {
         }
         html += '</div></div>';
     }
-
-    // Bio
     if (author.bio) {
         html += `<div class="field-item bio-section">`;
         html += `<span class="field-label">Bio</span>`;
@@ -252,7 +259,6 @@ function displayResults(data) {
 
     html += '</div></div>';
 
-    // Multiple authors
     if (data.authors && data.authors.length > 0) {
         html += '<div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--color-gray-100);">';
         html += `<h4 style="font-size: 0.875rem; font-weight: 600; color: var(--color-gray-700); margin-bottom: 12px;">Additional Authors (${data.authors.length})</h4>`;
@@ -266,8 +272,6 @@ function displayResults(data) {
     }
 
     elements.authorResults.innerHTML = html;
-
-    // Raw JSON
     elements.rawJson.textContent = JSON.stringify(data, null, 2);
 }
 
@@ -301,7 +305,6 @@ function displayNoAuthor(data) {
 function displayApiError(data) {
     const message = data.error || `Extraction failed with status: ${data.status}`;
     showError(message);
-    // Also show raw JSON if available
     if (data.article_url) {
         elements.resultsSection.hidden = false;
         elements.resultStatus.textContent = data.status;
@@ -366,7 +369,6 @@ async function copyToClipboard(text, buttonEl) {
             buttonEl.innerHTML = originalHtml;
         }, 1500);
     } catch {
-        // Fallback for older browsers
         const textarea = document.createElement('textarea');
         textarea.value = text;
         textarea.style.position = 'fixed';
@@ -392,7 +394,6 @@ function processCsvFile(file) {
         const text = e.target.result;
         const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
-        // Skip header if it looks like one
         let startIdx = 0;
         if (lines.length > 0 && (lines[0].toLowerCase() === 'url' || lines[0].toLowerCase() === 'urls')) {
             startIdx = 1;
@@ -435,31 +436,101 @@ async function handleBatchExtract() {
     elements.batchExtractBtn.disabled = true;
     elements.batchLoading.hidden = false;
     elements.batchResults.hidden = true;
-    elements.batchProgress.textContent = `Processing ${csvUrls.length} URLs...`;
+    elements.batchProgress.textContent = `Submitting ${csvUrls.length} URLs...`;
 
     try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min for batch
-
-        const response = await fetch(`${API_BASE}/crawl/batch`, {
+        // Submit batch jobs
+        const submitResponse = await fetch(`${API_BASE}/crawl/batch`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ urls: csvUrls }),
-            signal: controller.signal,
         });
 
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.detail || `API returned status ${response.status}`);
+        if (!submitResponse.ok) {
+            const errorData = await submitResponse.json().catch(() => ({}));
+            throw new Error(errorData.detail || `API returned status ${submitResponse.status}`);
         }
 
-        const data = await response.json();
-        displayBatchResults(data);
+        const { job_ids, total } = await submitResponse.json();
+
+        // Poll all jobs
+        const jobResults = new Array(total).fill(null);
+        let completedCount = 0;
+        let failedCount = 0;
+        const startTime = Date.now();
+
+        while (completedCount + failedCount < total && Date.now() - startTime < MAX_POLL_TIME) {
+            await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+
+            for (let i = 0; i < total; i++) {
+                if (jobResults[i] !== null) continue;
+
+                try {
+                    const response = await fetch(`${API_BASE}/crawl/${job_ids[i]}`);
+                    if (!response.ok) continue;
+
+                    const data = await response.json();
+                    if (data.status !== 'processing') {
+                        jobResults[i] = data;
+                        completedCount++;
+                        elements.batchProgress.textContent =
+                            `${completedCount} / ${total} completed${failedCount > 0 ? ` (${failedCount} failed)` : ''}`;
+                    }
+                } catch {
+                    // Skip polling errors, will retry
+                }
+            }
+        }
+
+        // Process final results
+        currentBatchResults = [];
+        let successCount = 0;
+        let finalFailedCount = 0;
+
+        for (let i = 0; i < total; i++) {
+            const jobData = jobResults[i];
+            if (jobData === null) {
+                // Timed out polling
+                finalFailedCount++;
+                currentBatchResults.push({
+                    article_url: csvUrls[i],
+                    author: {},
+                    status: 'timeout',
+                    error: 'Polling timed out',
+                    elapsed_seconds: 0,
+                });
+                continue;
+            }
+
+            if (jobData.status === 'completed' && jobData.result) {
+                currentBatchResults.push(jobData.result);
+                if (jobData.result.status === 'success') {
+                    successCount++;
+                } else {
+                    finalFailedCount++;
+                }
+            } else {
+                finalFailedCount++;
+                currentBatchResults.push({
+                    article_url: jobData.url,
+                    author: {},
+                    status: jobData.status,
+                    error: jobData.error,
+                    elapsed_seconds: jobData.elapsed_seconds || 0,
+                });
+            }
+        }
+
+        displayBatchResults({
+            results: currentBatchResults,
+            total: total,
+            success_count: successCount,
+            failed_count: finalFailedCount,
+            elapsed_seconds: Math.round((Date.now() - startTime) / 1000),
+        });
     } catch (err) {
-        if (err.name === 'AbortError') {
-            showError('Batch request timed out. Try processing fewer URLs at once.');
+        if (err.message.includes('Failed to fetch') || err.message.includes('NetworkError')) {
+            showError('Unable to connect to the AuthorFinder API. Please check your connection and try again.');
         } else {
             showError(err.message || 'Batch processing failed.');
         }
@@ -480,14 +551,14 @@ function displayBatchResults(data) {
 
     let rows = '';
     for (const result of data.results) {
-        const author = result.author;
+        const author = result.author || {};
         const statusClass = result.status === 'success' ? 'success' : 'error';
         rows += `
             <tr>
                 <td class="status-cell ${statusClass}">${result.status}</td>
-                <td>${author.name ? escapeHtml(author.name) : '<span style="color:var(--color-gray-400)">—</span>'}</td>
-                <td>${author.email ? escapeHtml(author.email) : '<span style="color:var(--color-gray-400)">—</span>'}</td>
-                <td>${author.linkedin ? `<a href="${escapeAttr(author.linkedin)}" target="_blank" rel="noopener">Profile</a>` : '<span style="color:var(--color-gray-400)">—</span>'}</td>
+                <td>${author.name ? escapeHtml(author.name) : '<span style="color:var(--color-gray-400)">&mdash;</span>'}</td>
+                <td>${author.email ? escapeHtml(author.email) : '<span style="color:var(--color-gray-400)">&mdash;</span>'}</td>
+                <td>${author.linkedin ? `<a href="${escapeAttr(author.linkedin)}" target="_blank" rel="noopener">Profile</a>` : '<span style="color:var(--color-gray-400)">&mdash;</span>'}</td>
                 <td class="url-cell"><a href="${escapeAttr(result.article_url)}" target="_blank" rel="noopener">${escapeHtml(result.article_url)}</a></td>
             </tr>
         `;
@@ -503,7 +574,7 @@ function downloadResultsCsv() {
     const rows = [headers.join(',')];
 
     for (const result of currentBatchResults) {
-        const a = result.author;
+        const a = result.author || {};
         const row = [
             result.status,
             csvEscape(a.name),
@@ -546,7 +617,7 @@ function showLoading() {
 function hideLoading() {
     elements.loadingState.hidden = true;
     elements.extractBtn.classList.remove('btn-loading');
-    validateUrlInput(); // Re-enable button if URL is valid
+    validateUrlInput();
 }
 
 function showError(message) {
@@ -580,5 +651,4 @@ function escapeAttr(text) {
         .replace(/>/g, '&gt;');
 }
 
-// Expose copyToClipboard globally for onclick handlers
 window.copyToClipboard = copyToClipboard;

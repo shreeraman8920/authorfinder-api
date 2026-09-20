@@ -316,6 +316,11 @@ class Fetcher:
             }
         )
         self.robots = RobotsChecker(user_agent)
+        self._context = None  # shared Playwright context set by crawler
+
+    def set_context(self, context) -> None:
+        """Set a shared Playwright browser context for the current crawl."""
+        self._context = context
 
     async def fetch(self, url: str) -> FetchResult:
         if not self.robots.can_fetch(url):
@@ -406,9 +411,12 @@ class Fetcher:
                 "Playwright is not installed. Run: pip install 'authorfinder[playwright]' "
                 "and then 'python -m playwright install chromium'."
             ) from exc
+
+        if self._context is not None:
+            return await self._fetch_js_with_context(url, self._context)
+
         log.debug("Launching Playwright browser for %s", url)
         async with async_playwright() as p:
-            # In a .exe, Chromium isn't bundled — use system Chrome instead.
             channel = "chrome" if frozen else None
             browser = await p.chromium.launch(headless=True, channel=channel)
             try:
@@ -417,33 +425,38 @@ class Fetcher:
                     locale="en-US",
                     viewport={"width": 1366, "height": 900},
                 )
-                page = await context.new_page()
-                resp = await page.goto(url, timeout=int(self.timeout * 1000), wait_until="domcontentloaded")
-                await _dismiss_consent(page)
-                await _wait_for_content(page, self.timeout)
-                html = await page.content()
-                if _has_bad_chars(html) and resp is not None:
-                    # The browser decoded per the declared charset; if that
-                    # produced mojibake, re-decode the raw response bytes.
-                    try:
-                        body = await resp.body()
-                    except Exception:
-                        body = None
-                    if body:
-                        declared = _charset_from_content_type(str(resp.headers.get("content-type", "")))
-                        decoded = _safe_decode(body, declared)
-                        if not _has_bad_chars(decoded):
-                            html = decoded
-                final_url = page.url
-                status = resp.status if resp is not None else None
-                if status in BLOCKED_STATUS or _looks_like_challenge(html):
-                    raise BlockedError(
-                        f"site blocked the browser request ({status}) for {url}"
-                    )
-                if _looks_like_paywall(html):
-                    raise PaywallError(f"paywall detected in browser for {url}")
+                return await self._fetch_js_with_context(url, context)
             finally:
                 await browser.close()
+
+    async def _fetch_js_with_context(self, url: str, context) -> FetchResult:
+        """Fetch a URL using a shared Playwright context, managing only the page."""
+        page = await context.new_page()
+        try:
+            resp = await page.goto(url, timeout=int(self.timeout * 1000), wait_until="domcontentloaded")
+            await _dismiss_consent(page)
+            await _wait_for_content(page, self.timeout)
+            html = await page.content()
+            if _has_bad_chars(html) and resp is not None:
+                try:
+                    body = await resp.body()
+                except Exception:
+                    body = None
+                if body:
+                    declared = _charset_from_content_type(str(resp.headers.get("content-type", "")))
+                    decoded = _safe_decode(body, declared)
+                    if not _has_bad_chars(decoded):
+                        html = decoded
+            final_url = page.url
+            status = resp.status if resp is not None else None
+            if status in BLOCKED_STATUS or _looks_like_challenge(html):
+                raise BlockedError(
+                    f"site blocked the browser request ({status}) for {url}"
+                )
+            if _looks_like_paywall(html):
+                raise PaywallError(f"paywall detected in browser for {url}")
+        finally:
+            await page.close()
         log.debug("Playwright fetched %s (status=%s)", url, status)
         return FetchResult(url=url, html=html, status_code=status or 0, final_url=final_url)
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 
 from .author import choose_author, detect_authors, choose_multiple_authors
 from .extract import extract_author_page
@@ -18,6 +19,39 @@ class AuthorCrawler:
         self.fetcher = fetcher or Fetcher(**fetch_kwargs)
 
     async def crawl(self, article_url: str) -> dict:
+        use_browser = getattr(self.fetcher, "use_playwright", False)
+        if use_browser and getattr(self.fetcher, "_context", None) is None:
+            return await self._crawl_with_browser(article_url)
+        return await self._crawl(article_url)
+
+    async def _crawl_with_browser(self, article_url: str) -> dict:
+        """Run crawl with a shared Playwright browser/context lifecycle."""
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError(
+                "Playwright is not installed. Run: pip install 'authorfinder[playwright]' "
+                "and then 'python -m playwright install chromium'."
+            ) from exc
+
+        frozen = getattr(sys, "frozen", False)
+        channel = "chrome" if frozen else None
+        log.debug("Launching shared Playwright browser for crawl")
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True, channel=channel)
+            try:
+                context = await browser.new_context(
+                    user_agent=self.fetcher.user_agent,
+                    locale="en-US",
+                    viewport={"width": 1366, "height": 900},
+                )
+                self.fetcher.set_context(context)
+                return await self._crawl(article_url)
+            finally:
+                self.fetcher.set_context(None)
+                await browser.close()
+
+    async def _crawl(self, article_url: str) -> dict:
         article_url = normalize_article_url(article_url)
         result: dict = {
             "article_url": article_url,
