@@ -4,7 +4,7 @@
  */
 
 // ── Configuration ────────────────────────────────────────────────────────
-const API_BASE = 'https://authorfinder-api.onrender.com';
+const API_BASE = 'https://authorfinder-api.shree8920.blitz.cloud';
 const REQUEST_TIMEOUT = 90000; // 90s — API may take time for Playwright renders
 
 // ── DOM Elements ─────────────────────────────────────────────────────────
